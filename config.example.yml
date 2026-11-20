@@ -1,0 +1,7 @@
+# NPprobe 测试端配置（安装脚本会生成 /etc/npprobe/config.yml）
+# 面板接口地址（和节点安装命令里的 --api-host 一样，带 /api）
+panel: https://panel.example.com/api
+# 面板 → 运维管理 → 测试端，新建或重置 token 后显示（只显示一次）
+token: npp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# debug / info / warn
+log_level: info
