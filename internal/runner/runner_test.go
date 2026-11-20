@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -106,7 +108,11 @@ func TestInvalidProxyConfigReportsProxyFail(t *testing.T) {
 
 // 真实走 mihomo：http 代理（本地 CONNECT 代理）→ 本地 204 服务
 func TestMihomoEndToEnd(t *testing.T) {
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/down" {
+			_, _ = w.Write(make([]byte, 512<<10))
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer target.Close()
@@ -119,7 +125,8 @@ func TestMihomoEndToEnd(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 
 	p := &fakePanel{targets: &panel.Targets{
-		Config: panel.Config{TestURLs: []string{target.URL + "/generate_204"}, TimeoutMS: 3000},
+		Config: panel.Config{TestURLs: []string{target.URL + "/generate_204"}, TimeoutMS: 3000,
+			SpeedTest: panel.SpeedTest{EveryRounds: 1, URL: target.URL + "/down", MaxBytes: 256 << 10}},
 		Targets: []panel.Target{{NodeID: 1, Name: "local", Protocol: "http", Address: "127.0.0.1", Port: int64(port),
 			Proxy: map[string]any{"name": "local", "type": "http", "server": "127.0.0.1", "port": port}}},
 	}}
@@ -130,8 +137,8 @@ func TestMihomoEndToEnd(t *testing.T) {
 		t.Fatal("no report")
 	}
 	res := p.reports[0].Results[0]
-	if res.Status != tester.StatusOK || res.DelayMS <= 0 && res.Error != "" {
-		t.Fatalf("result = %+v", res)
+	if res.Status != tester.StatusOK || res.SpeedKbps <= 0 {
+		t.Fatalf("result must be ok with a speed test through mihomo: %+v", res)
 	}
 
 	// 代理关掉后应判为失败
@@ -163,5 +170,33 @@ func serveConnectProxy(ln net.Listener) {
 			go func() { _, _ = io.Copy(up, c) }()
 			_, _ = io.Copy(c, up)
 		}(c)
+	}
+}
+
+func TestPendingSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	p := &fakePanel{failing: true, targets: &panel.Targets{Targets: []panel.Target{{NodeID: 1, Protocol: "tuic"}}}}
+	mk := func() *Runner {
+		r := &Runner{Panel: p, Log: quiet(), StateDir: dir,
+			Tester:  &tester.Tester{URLs: []string{"u"}, Timeout: time.Second},
+			Factory: func(map[string]any) (tester.URLTester, func(), error) { return okProxy{}, nil, nil }}
+		r.applyTargets(p.targets)
+		return r
+	}
+	r := mk()
+	r.RunRound(context.Background())
+	if r.Pending() != 1 {
+		t.Fatalf("pending = %d", r.Pending())
+	}
+	// 新进程：从磁盘读回，面板恢复后一起补报
+	r2 := mk()
+	r2.loadPending()
+	p.failing = false
+	r2.RunRound(context.Background())
+	if len(p.reports) != 2 || r2.Pending() != 0 {
+		t.Fatalf("reports=%d pending=%d", len(p.reports), r2.Pending())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "pending.json")); !os.IsNotExist(err) {
+		t.Fatal("pending file must be removed once everything is reported")
 	}
 }

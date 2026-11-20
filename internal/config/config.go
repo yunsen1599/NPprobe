@@ -18,6 +18,10 @@ type Config struct {
 	Token string `yaml:"token"`
 	// LogLevel debug / info（默认）/ warn
 	LogLevel string `yaml:"log_level"`
+	// ReleaseRepo 自升级下载安装包的 GitHub 仓库（owner/name），默认 yunsen1599/NPprobe
+	ReleaseRepo string `yaml:"release_repo"`
+	// StateDir 补报缓存等运行数据，默认 /var/lib/npprobe
+	StateDir string `yaml:"state_dir"`
 }
 
 func Load(path string) (*Config, error) {
@@ -37,6 +41,12 @@ func Load(path string) (*Config, error) {
 	}
 	if c.Token == "" {
 		return nil, fmt.Errorf("token is required")
+	}
+	if c.ReleaseRepo == "" {
+		c.ReleaseRepo = "yunsen1599/NPprobe"
+	}
+	if c.StateDir == "" {
+		c.StateDir = "/var/lib/npprobe"
 	}
 	return &c, nil
 }

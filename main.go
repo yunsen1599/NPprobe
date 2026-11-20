@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"github.com/yunsen1599/NPprobe/internal/config"
 	"github.com/yunsen1599/NPprobe/internal/panel"
 	"github.com/yunsen1599/NPprobe/internal/runner"
+	"github.com/yunsen1599/NPprobe/internal/upgrade"
 )
 
 // version 发布时由 -ldflags "-X main.version=x.y.z" 注入
@@ -48,8 +50,19 @@ func main() {
 	defer stop()
 
 	logger.Info("NPprobe starting", "version", version, "panel", cfg.Panel)
-	r := &runner.Runner{Panel: panel.New(cfg.Panel, cfg.Token, version), Version: version, Log: logger}
-	if err := r.Run(ctx); err != nil && ctx.Err() == nil {
+	r := &runner.Runner{
+		Panel:    panel.New(cfg.Panel, cfg.Token, version),
+		Version:  version,
+		Log:      logger,
+		StateDir: cfg.StateDir,
+		Upgrader: &upgrade.Upgrader{Repo: cfg.ReleaseRepo, Current: version},
+	}
+	err = r.Run(ctx)
+	if errors.Is(err, upgrade.ErrRestart) {
+		// 新版本已替换到位，正常退出，由 systemd 拉起新版本
+		return
+	}
+	if err != nil && ctx.Err() == nil {
 		logger.Error("exit", "err", err)
 		os.Exit(1)
 	}

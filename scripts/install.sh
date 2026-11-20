@@ -23,7 +23,7 @@ command -v systemctl >/dev/null || die "需要 systemd"
 uninstall() {
     systemctl disable --now npprobe 2>/dev/null || true
     rm -f "$UNIT" "$BIN"
-    rm -rf "$CONF_DIR"
+    rm -rf "$CONF_DIR" /var/lib/npprobe
     systemctl daemon-reload
     green "NPprobe 已卸载"
 }
@@ -79,6 +79,9 @@ cat >"$CONF_DIR/config.yml" <<EOF
 panel: $panel
 token: $token
 log_level: info
+# 自升级从这个仓库的 Release 下载
+release_repo: $REPO
+state_dir: /var/lib/npprobe
 EOF
 chmod 600 "$CONF_DIR/config.yml"
 
@@ -98,6 +101,9 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+# 补报缓存（/var/lib/npprobe）；自升级要替换 /usr/local/bin/npprobe
+StateDirectory=npprobe
+ReadWritePaths=/usr/local/bin
 
 [Install]
 WantedBy=multi-user.target

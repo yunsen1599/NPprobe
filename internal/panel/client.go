@@ -18,10 +18,20 @@ import (
 var ErrUnauthorized = errors.New("panel rejected token (probe disabled or token reset)")
 
 type Config struct {
-	RoundInterval int      `json:"round_interval"`
-	Concurrency   int      `json:"concurrency"`
-	TimeoutMS     int      `json:"timeout_ms"`
-	TestURLs      []string `json:"test_urls"`
+	RoundInterval int       `json:"round_interval"`
+	Concurrency   int       `json:"concurrency"`
+	TimeoutMS     int       `json:"timeout_ms"`
+	TestURLs      []string  `json:"test_urls"`
+	SpeedTest     SpeedTest `json:"speed_test"`
+	// TargetVersion 面板要求的版本（latest / x.y.z）；空 = 不升级
+	TargetVersion string `json:"target_version"`
+}
+
+// SpeedTest 每个节点每 EveryRounds 轮经代理下载一次 URL（最多 MaxBytes 字节）
+type SpeedTest struct {
+	EveryRounds int    `json:"every_rounds"`
+	URL         string `json:"url"`
+	MaxBytes    int64  `json:"max_bytes"`
 }
 
 type Target struct {
@@ -48,6 +58,7 @@ type Result struct {
 	Status    string `json:"status"` // ok / tcp_fail / proxy_fail
 	TCPMS     int64  `json:"tcp_ms"`
 	DelayMS   int64  `json:"delay_ms"`
+	SpeedKbps int64  `json:"speed_kbps"` // 本轮测速结果，0 = 本轮没测
 	Error     string `json:"error"`
 	CheckedAt int64  `json:"checked_at"`
 }

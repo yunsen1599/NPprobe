@@ -5,3 +5,7 @@ panel: https://panel.example.com/api
 token: npp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 # debug / info / warn
 log_level: info
+# 自升级下载安装包的 GitHub 仓库（必须公开）
+release_repo: yunsen1599/NPprobe
+# 补报缓存等运行数据
+state_dir: /var/lib/npprobe

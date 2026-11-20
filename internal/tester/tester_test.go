@@ -67,3 +67,18 @@ func TestTCPFailAndUDPSkip(t *testing.T) {
 		t.Fatalf("udp protocols skip the tcp step: %+v", r)
 	}
 }
+
+func TestSpeedHelpers(t *testing.T) {
+	if Kbps(1_000_000, time.Second) != 8000 || Kbps(1000, time.Second) != 0 {
+		t.Fatal("Kbps")
+	}
+	hits := 0
+	for round := int64(0); round < 12; round++ {
+		if SpeedDue(5, round, 12) {
+			hits++
+		}
+	}
+	if hits != 1 || SpeedDue(5, 0, 0) {
+		t.Fatalf("each node once per 12 rounds, got %d", hits)
+	}
+}

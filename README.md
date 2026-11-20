@@ -34,7 +34,13 @@ go build -o npprobe .
 scripts/release.sh 0.1.0 # 编译 linux amd64/arm64，创建 Release
 ```
 
-代码结构：`internal/panel`（面板接口）、`internal/tester`（单个节点的测试步骤）、`internal/runner`（拉目标、每轮测试、回报与补报）。
+代码结构：`internal/panel`（面板接口）、`internal/tester`（单个节点的测试步骤、测速）、`internal/runner`（拉目标、每轮测试、回报与补报）、`internal/upgrade`（自升级）。
+
+## 测速与自升级
+
+- **测速**：面板下发 `speed_test`（默认每个节点每 12 轮一次，经代理下载 2 MB），结果随本轮回报的 `speed_kbps` 上报。
+- **自升级**：面板 → 测速管理 → 测试端列表 →「升级」设目标版本（`latest` 或 `x.y.z`）。测试端拉到目标后从 `release_repo` 的 Release 下载对应架构的安装包，按 `checksums.txt` 校验，替换 `/usr/local/bin/npprobe` 后退出，由 systemd 重启。`dev` 版本不自升级。
+- **补报缓存**：没报上去的轮次写到 `state_dir/pending.json`（默认 `/var/lib/npprobe`），重启或升级后继续补报，最多保留 1 小时。
 
 ## 许可证
 

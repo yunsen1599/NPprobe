@@ -14,6 +14,8 @@ import (
 	"errors"
 	"log/slog"
 	"math/big"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/yunsen1599/NPprobe/internal/panel"
 	"github.com/yunsen1599/NPprobe/internal/tester"
+	"github.com/yunsen1599/NPprobe/internal/upgrade"
 )
 
 const (
@@ -68,6 +71,10 @@ type Runner struct {
 	Log     *slog.Logger
 	// Tester 可替换（测试用）；为空时按面板参数创建
 	Tester *tester.Tester
+	// Upgrader 自升级；为空时不升级
+	Upgrader *upgrade.Upgrader
+	// StateDir 补报缓存文件所在目录；为空时只缓存在内存
+	StateDir string
 
 	mu          sync.Mutex
 	cfg         panel.Config
@@ -75,6 +82,10 @@ type Runner struct {
 	order       []int64
 	lastTargets time.Time
 	pending     []panel.Report
+	round       int64
+	// upgradeFailed 升级失败的版本和时间，1 小时内不重试同一版本
+	upgradeFailed   string
+	upgradeFailedAt time.Time
 }
 
 // Run 一直运行到 ctx 取消
@@ -86,6 +97,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		r.Log = slog.Default()
 	}
 	r.entries = map[int64]*entry{}
+	r.loadPending()
 	// 首次必须拿到测试目标
 	for {
 		err := r.refreshTargets(ctx)
@@ -102,6 +114,10 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 	}
 	defer r.closeAll()
+	// 自升级只在拿到新的测试目标后检查（目标版本随测试目标下发）
+	if err := r.maybeUpgrade(ctx); errors.Is(err, upgrade.ErrRestart) {
+		return err
+	}
 	for {
 		if time.Since(r.lastTargets) >= targetsInterval {
 			if err := r.refreshTargets(ctx); err != nil {
@@ -109,6 +125,8 @@ func (r *Runner) Run(ctx context.Context) error {
 				if errors.Is(err, panel.ErrUnauthorized) {
 					r.dropAll()
 				}
+			} else if err := r.maybeUpgrade(ctx); errors.Is(err, upgrade.ErrRestart) {
+				return err
 			}
 		}
 		r.RunRound(ctx)
@@ -221,6 +239,11 @@ func (r *Runner) RunRound(ctx context.Context) {
 	if conc <= 0 {
 		conc = defaultConc
 	}
+	r.mu.Lock()
+	round := r.round
+	r.round++
+	r.mu.Unlock()
+	speed := cfg.SpeedTest
 
 	start := time.Now()
 	results := make([]panel.Result, len(list))
@@ -238,6 +261,9 @@ func (r *Runner) RunRound(ctx context.Context) {
 				return
 			}
 			results[i] = tt.Test(ctx, e.target, e.proxy)
+			if results[i].Status == tester.StatusOK && speed.URL != "" && tester.SpeedDue(e.target.NodeID, round, speed.EveryRounds) {
+				results[i].SpeedKbps = r.speedTest(ctx, e, speed)
+			}
 			if results[i].Status != tester.StatusOK {
 				r.Log.Debug("node failed", "node", tester.Describe(e.target), "status", results[i].Status, "err", results[i].Error)
 			}
@@ -279,6 +305,117 @@ func (r *Runner) report(ctx context.Context, rep panel.Report) {
 	r.mu.Lock()
 	r.pending = append(keep, r.pending...)
 	r.mu.Unlock()
+	r.savePending()
+}
+
+// speedTest 经代理下载一次；失败或数据太少时返回 0（不影响本轮的连通结果）
+func (r *Runner) speedTest(ctx context.Context, e *entry, cfg panel.SpeedTest) int64 {
+	d, ok := e.proxy.(tester.Downloader)
+	if !ok {
+		return 0
+	}
+	maxBytes := cfg.MaxBytes
+	if maxBytes <= 0 {
+		maxBytes = 2_000_000
+	}
+	sctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	n, took, err := d.Download(sctx, cfg.URL, maxBytes)
+	if err != nil {
+		r.Log.Debug("speed test failed", "node", tester.Describe(e.target), "err", err)
+		return 0
+	}
+	kbps := tester.Kbps(n, took)
+	r.Log.Debug("speed test", "node", tester.Describe(e.target), "bytes", n, "took", took, "kbps", kbps)
+	return kbps
+}
+
+// maybeUpgrade 面板要求的版本与当前不同时自升级；成功返回 upgrade.ErrRestart
+func (r *Runner) maybeUpgrade(ctx context.Context) error {
+	r.mu.Lock()
+	target := r.cfg.TargetVersion
+	failed, failedAt := r.upgradeFailed, r.upgradeFailedAt
+	r.mu.Unlock()
+	if r.Upgrader == nil || target == "" {
+		return nil
+	}
+	uctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	version, err := r.Upgrader.Resolve(uctx, target)
+	if err != nil {
+		r.Log.Warn("resolve upgrade version failed", "target", target, "err", err)
+		return err
+	}
+	if !r.Upgrader.Needed(version) || (version == failed && time.Since(failedAt) < time.Hour) {
+		return nil
+	}
+	r.Log.Info("upgrading", "from", r.Version, "to", version)
+	err = r.Upgrader.Apply(uctx, version)
+	if errors.Is(err, upgrade.ErrRestart) {
+		r.Log.Info("upgrade installed, restarting", "version", version)
+		r.savePending()
+		return err
+	}
+	r.mu.Lock()
+	r.upgradeFailed, r.upgradeFailedAt = version, time.Now()
+	r.mu.Unlock()
+	r.Log.Error("upgrade failed, retry in 1h", "version", version, "err", err)
+	return err
+}
+
+func (r *Runner) pendingFile() string {
+	if r.StateDir == "" {
+		return ""
+	}
+	return filepath.Join(r.StateDir, "pending.json")
+}
+
+// savePending 待补报的轮次写盘，进程重启（含自升级）后还能补报
+func (r *Runner) savePending() {
+	path := r.pendingFile()
+	if path == "" {
+		return
+	}
+	r.mu.Lock()
+	raw, err := json.Marshal(r.pending)
+	empty := len(r.pending) == 0
+	r.mu.Unlock()
+	if err != nil {
+		return
+	}
+	if empty {
+		_ = os.Remove(path)
+		return
+	}
+	if err := os.MkdirAll(r.StateDir, 0o700); err != nil {
+		r.Log.Warn("save pending reports failed", "err", err)
+		return
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err == nil {
+		err = os.Rename(tmp, path)
+		if err != nil {
+			r.Log.Warn("save pending reports failed", "err", err)
+		}
+	}
+}
+
+func (r *Runner) loadPending() {
+	path := r.pendingFile()
+	if path == "" {
+		return
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var pending []panel.Report
+	if json.Unmarshal(raw, &pending) == nil {
+		r.mu.Lock()
+		r.pending = append(pending, r.pending...)
+		r.mu.Unlock()
+		r.Log.Info("loaded pending reports", "rounds", len(pending))
+	}
 }
 
 // Pending 待补报的轮数（测试用）
