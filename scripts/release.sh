@@ -31,7 +31,8 @@ for arch in amd64 arm64; do
     mkdir -p "$pkg"
     GOOS=linux GOARCH="$arch" CGO_ENABLED=0 \
         go build -trimpath -ldflags "-s -w -buildid= -X main.version=$version" -o "$pkg/npprobe" .
-    tar -C "$pkg" -czf "$work/dist/npprobe-linux-$arch.tar.gz" npprobe
+    # COPYFILE_DISABLE / --no-xattrs：macOS 上打包时不带扩展属性，Linux 解压不会出警告
+    COPYFILE_DISABLE=1 tar --no-xattrs -C "$pkg" -czf "$work/dist/npprobe-linux-$arch.tar.gz" npprobe
 done
 (cd "$work/dist" && shasum -a 256 *.tar.gz > checksums.txt)
 

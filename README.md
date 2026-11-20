@@ -23,6 +23,14 @@ bash <(curl -Ls https://raw.githubusercontent.com/yunsen1599/NPprobe/main/script
 - 安装到 `/usr/local/bin/npprobe`，配置 `/etc/npprobe/config.yml`（见 `config.example.yml`），systemd 服务 `npprobe.service`
 - 日志：`journalctl -u npprobe -f`；卸载：同一个脚本加 `uninstall`
 - 安装包从本仓库的 GitHub Release 下载并按 `checksums.txt` 校验；要换发布仓库时，发布设 `RELEASE_REPO`、安装设 `NPPROBE_REPO`
+- 系统要求：x86_64 / arm64 的 systemd Linux（Debian、Ubuntu、CentOS 7+、Rocky、Alma、Fedora、openSUSE、Arch 等；Alpine 等非 systemd 系统不支持）。不需要 git；缺少 curl / tar / sha256sum 时脚本会用 apt / dnf / yum / zypper / pacman 自动安装，curl 装不上时改用 wget
+- 连不上 GitHub 的机器：在别处下载 `npprobe-linux-<arch>.tar.gz`、`checksums.txt` 和 `install.sh` 传上去，离线安装：
+
+```bash
+bash install.sh --panel https://panel.example.com/api --token npp_xxx --package ./npprobe-linux-amd64.tar.gz --checksums ./checksums.txt
+```
+
+- 面板「远程安装」会自动处理这种情况：脚本以退出码 20 报告下载不了安装包时，面板下载后通过 SSH 直传再安装
 
 ## 开发
 
