@@ -22,8 +22,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/yunsen1599/NPprobe/main/script
 
 - 安装到 `/usr/local/bin/npprobe`，配置 `/etc/npprobe/config.yml`（见 `config.example.yml`），systemd 服务 `npprobe.service`
 - 日志：`journalctl -u npprobe -f`；卸载：同一个脚本加 `uninstall`
-- 安装包从 GitHub Release 下载并按 `checksums.txt` 校验。本仓库是私有的，需要把 Release 发到公开仓库：
-  发布时设 `RELEASE_REPO`，安装时设 `NPPROBE_REPO`，面板里安装命令的脚本地址也要改成公开仓库的
+- 安装包从本仓库的 GitHub Release 下载并按 `checksums.txt` 校验；要换发布仓库时，发布设 `RELEASE_REPO`、安装设 `NPPROBE_REPO`
 
 ## 开发
 
@@ -44,4 +43,4 @@ scripts/release.sh 0.1.0 # 编译 linux amd64/arm64，创建 Release
 
 ## 许可证
 
-mihomo 是 GPL-3.0。本程序只在自有 VPS 上运行没有问题；如果把二进制分发给第三方，需要按 GPL-3.0 一并提供源码。
+GPL-3.0（见 `LICENSE`）。本程序以库的方式引入 [mihomo](https://github.com/MetaCubeX/mihomo)（GPL-3.0），按其要求以 GPL-3.0 开源发布。
