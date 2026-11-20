@@ -1,0 +1,17 @@
+# 编译产物
+/bin/
+/dist/
+npprobe
+*.exe
+*.test
+*.out
+coverage.*
+
+# 本地配置（含面板 token，不要提交）
+config.yml
+!config.example.yml
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
