@@ -118,6 +118,71 @@ func TestNoTargetsStillHeartbeats(t *testing.T) {
 	}
 }
 
+// speedProxy 记录同时进行的下载数，以及下载开始时连通测试是否已全部结束
+type speedProxy struct {
+	mu                  *sync.Mutex
+	inFlight, maxFlight *int
+	tested              *int
+	total               int
+	earlyDownload       *bool
+}
+
+func (p speedProxy) URLTest(context.Context, string, []uint16) (uint16, error) {
+	time.Sleep(5 * time.Millisecond)
+	p.mu.Lock()
+	*p.tested++
+	p.mu.Unlock()
+	return 50, nil
+}
+
+func (p speedProxy) Download(context.Context, string, int64) (int64, time.Duration, error) {
+	p.mu.Lock()
+	*p.inFlight++
+	*p.maxFlight = max(*p.maxFlight, *p.inFlight)
+	if *p.tested < p.total {
+		*p.earlyDownload = true
+	}
+	p.mu.Unlock()
+	time.Sleep(10 * time.Millisecond)
+	p.mu.Lock()
+	*p.inFlight--
+	p.mu.Unlock()
+	return 1 << 20, 100 * time.Millisecond, nil
+}
+
+func TestSpeedTestsRunOneAtATimeAfterConnectivity(t *testing.T) {
+	var mu sync.Mutex
+	var inFlight, maxFlight, tested int
+	var early bool
+	const n = 6
+	proxy := speedProxy{mu: &mu, inFlight: &inFlight, maxFlight: &maxFlight, tested: &tested, total: n, earlyDownload: &early}
+	targets := make([]panel.Target, 0, n)
+	for i := 1; i <= n; i++ {
+		targets = append(targets, panel.Target{NodeID: int64(i), Protocol: "hysteria2"})
+	}
+	p := &fakePanel{targets: &panel.Targets{
+		Config:  panel.Config{Concurrency: n, SpeedTest: panel.SpeedTest{EveryRounds: 1, URL: "http://speed", MaxBytes: 1 << 20}},
+		Targets: targets,
+	}}
+	r := &Runner{Panel: p, Log: quiet(), Version: "t",
+		Tester:  &tester.Tester{URLs: []string{"u"}, Timeout: time.Second},
+		Factory: func(map[string]any) (tester.URLTester, func(), error) { return proxy, nil, nil }}
+	r.applyTargets(p.targets)
+	r.RunRound(context.Background())
+
+	if maxFlight != 1 {
+		t.Fatalf("speed tests must not overlap: max in flight = %d", maxFlight)
+	}
+	if early {
+		t.Fatal("speed tests must start after every connectivity test finished")
+	}
+	for _, res := range p.reports[0].Results {
+		if res.SpeedKbps <= 0 {
+			t.Fatalf("every node is due this round and must have a speed: %+v", res)
+		}
+	}
+}
+
 func TestInvalidProxyConfigReportsProxyFail(t *testing.T) {
 	p := &fakePanel{targets: &panel.Targets{Targets: []panel.Target{{NodeID: 7, Proxy: map[string]any{"type": "nope"}}}}}
 	r := &Runner{Panel: p, Log: quiet(), Factory: MihomoFactory}

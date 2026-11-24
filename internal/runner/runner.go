@@ -1,7 +1,8 @@
 // Package runner 测试端主循环：
 //
 //  1. 每 10 分钟拉一次测试目标；某个目标的代理配置变了就重建它的 mihomo 代理对象
-//  2. 每轮（面板下发的间隔 ± 30 秒随机抖动）按并发数测试全部目标
+//  2. 每轮（面板下发的间隔 ± 30 秒随机抖动）按并发数测试全部目标的连通性，
+//     然后把这一轮轮到测速的节点逐个测速（不并发）
 //  3. 一轮结束后批量回报；失败的轮次缓存在内存里，下次一起补报（最多保留 1 小时）
 package runner
 
@@ -268,9 +269,6 @@ func (r *Runner) RunRound(ctx context.Context) {
 				return
 			}
 			results[i] = tt.Test(ctx, e.target, e.proxy)
-			if results[i].Status == tester.StatusOK && speed.URL != "" && tester.SpeedDue(e.target.NodeID, round, speed.EveryRounds) {
-				results[i].SpeedKbps = r.speedTest(ctx, e, speed)
-			}
 			if results[i].Status != tester.StatusOK {
 				r.Log.Debug("node failed", "node", tester.Describe(e.target), "status", results[i].Status, "err", results[i].Error)
 			}
@@ -279,6 +277,17 @@ func (r *Runner) RunRound(ctx context.Context) {
 	wg.Wait()
 	if ctx.Err() != nil {
 		return
+	}
+	// 测速在全部连通测试结束后逐个进行：同一时间只有一个下载，结果不会被别的下载或测试抢带宽拉低
+	if speed.URL != "" {
+		for i, e := range list {
+			if ctx.Err() != nil {
+				return
+			}
+			if results[i].Status == tester.StatusOK && tester.SpeedDue(e.target.NodeID, round, speed.EveryRounds) {
+				results[i].SpeedKbps = r.speedTest(ctx, e, speed)
+			}
+		}
 	}
 	ok := 0
 	for _, res := range results {
