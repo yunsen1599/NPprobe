@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/metacubex/mihomo/adapter"
 	"github.com/yunsen1599/NPprobe/internal/panel"
 	"github.com/yunsen1599/NPprobe/internal/tester"
 )
@@ -93,6 +94,27 @@ func TestRoundReportsAndBackfills(t *testing.T) {
 	}
 	if p.reports[0].RoundID == p.reports[1].RoundID {
 		t.Fatal("each round needs its own round_id")
+	}
+}
+
+func TestUnifiedDelayEnabled(t *testing.T) {
+	if !adapter.UnifiedDelay.Load() {
+		t.Fatal("probe must measure with mihomo unified delay")
+	}
+}
+
+func TestNoTargetsStillHeartbeats(t *testing.T) {
+	p := &fakePanel{targets: &panel.Targets{}}
+	r := &Runner{Panel: p, Log: quiet(), Version: "t"}
+	r.applyTargets(p.targets)
+	r.RunRound(context.Background())
+	if len(p.reports) != 1 || len(p.reports[0].Results) != 0 || p.reports[0].Version != "t" {
+		t.Fatalf("empty round must still heartbeat: %+v", p.reports)
+	}
+	p.failing = true
+	r.RunRound(context.Background())
+	if r.Pending() != 0 {
+		t.Fatalf("failed heartbeat must not be cached: pending=%d", r.Pending())
 	}
 }
 

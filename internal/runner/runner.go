@@ -45,6 +45,11 @@ type Panel interface {
 // ProxyFactory 由 Clash 代理配置建代理对象（默认用 mihomo）
 type ProxyFactory func(mapping map[string]any) (tester.URLTester, func(), error)
 
+// 统一延迟（同 mihomo / Clash 的 unified-delay）：建好连接后再请求一次，只计第二次的耗时，
+// 去掉 TCP / TLS / 协议握手，结果接近「测试端 → 节点 → 测试地址」一个来回，和客户端里显示的口径一致。
+// 第二次请求失败时 mihomo 退回第一次（含握手）的耗时，不会因此判为失败。
+func init() { adapter.UnifiedDelay.Store(true) }
+
 // MihomoFactory 用 mihomo 解析 Clash 代理配置
 func MihomoFactory(mapping map[string]any) (tester.URLTester, func(), error) {
 	p, err := adapter.ParseProxy(mapping)
@@ -225,6 +230,8 @@ func (r *Runner) RunRound(ctx context.Context) {
 	}
 	r.mu.Unlock()
 	if len(list) == 0 {
+		// 没有测试目标（面板里禁用了，或还没分配节点）也要报心跳，否则面板一直显示离线
+		r.report(ctx, panel.Report{Version: r.Version, Results: []panel.Result{}})
 		return
 	}
 	tt := r.Tester
@@ -298,7 +305,12 @@ func (r *Runner) report(ctx context.Context, rep panel.Report) {
 		}
 		if err := r.Panel.Report(ctx, item); err != nil {
 			r.Log.Warn("report failed, will retry next round", "err", err, "pending", len(queue)-i)
-			keep = append(keep, queue[i:]...)
+			// 只有心跳、没有结果的不必补报
+			for _, rest := range queue[i:] {
+				if len(rest.Results) > 0 {
+					keep = append(keep, rest)
+				}
+			}
 			break
 		}
 	}
